@@ -41,3 +41,7 @@ pnpm-debug.log*
 /public/uploads/avatars/*
 !/public/uploads/avatars/.gitkeep
 /storage/
+
+/public/uploads/tickets/*
+!/public/uploads/tickets/.gitkeep
+

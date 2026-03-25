@@ -1,0 +1,279 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  MANAGER
+  AGENT
+}
+
+enum TicketStatus {
+  NEW
+  QUEUED
+  IN_PROGRESS
+  WAITING_RETURN
+  WAITING_OTHER_TEAM
+  CLOSED
+  CANCELED
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum TicketOrigin {
+  INTERNAL
+  CUSTOMER_PORTAL
+  EMAIL
+  WHATSAPP
+  API
+}
+
+enum InteractionType {
+  INTERNAL_NOTE
+  CUSTOMER_MESSAGE
+  AGREEMENT
+  STATUS_CHANGE
+  INBOX_MOVEMENT
+  CHILD_TICKET_CREATED
+  RESCHEDULED
+}
+
+enum ScheduleStatus {
+  PENDING
+  DONE
+  CANCELED
+}
+
+enum NotificationJobStatus {
+  PENDING
+  PROCESSING
+  SENT
+  FAILED
+}
+
+enum TicketRelationType {
+  CHILD
+}
+
+model Tenant {
+  id                      String         @id @default(cuid())
+  name                    String
+  slug                    String         @unique
+  isActive                Boolean        @default(true)
+  logoUrl                 String?
+  notificationSenderName  String?
+  notificationSenderEmail String?
+  defaultTicketPriority   TicketPriority @default(MEDIUM)
+  allowedTicketOrigins    TicketOrigin[] @default([INTERNAL, CUSTOMER_PORTAL, EMAIL, WHATSAPP, API])
+  closureReasons          String[]       @default(["Resolvido", "Solicitacao atendida", "Sem retorno do solicitante"])
+  createdAt               DateTime       @default(now())
+  updatedAt               DateTime       @updatedAt
+  users                   User[]
+  customers               Customer[]
+  inboxes                 Inbox[]
+  tickets                 Ticket[]
+  auditEvents             AuditEvent[]
+}
+
+model User {
+  id               String            @id @default(cuid())
+  tenantId         String
+  name             String
+  email            String
+  passwordHash     String?
+  avatarUrl        String?
+  role             UserRole
+  isActive         Boolean           @default(true)
+  lastLoginAt      DateTime?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  inboxMemberships InboxMembership[]
+  assignedTickets  Ticket[]          @relation("AssignedTickets")
+  createdTickets   Ticket[]          @relation("CreatedTickets")
+  interactions     TicketInteraction[]
+  schedules        TicketSchedule[]  @relation("ScheduledByUser")
+  auditEvents      AuditEvent[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+}
+
+model Customer {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  email     String?
+  phone     String?
+  document  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tickets   Ticket[]
+
+  @@index([tenantId])
+}
+
+model Inbox {
+  id                      String            @id @default(cuid())
+  tenantId                String
+  name                    String
+  code                    String
+  description             String?
+  isActive                Boolean           @default(true)
+  firstResponseSlaMinutes Int?
+  resolutionSlaHours      Int?
+  createdAt               DateTime          @default(now())
+  updatedAt               DateTime          @updatedAt
+  tenant                  Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  memberships             InboxMembership[]
+  tickets                 Ticket[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+}
+
+model InboxMembership {
+  id        String   @id @default(cuid())
+  inboxId   String
+  userId    String
+  createdAt DateTime @default(now())
+  inbox     Inbox    @relation(fields: [inboxId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([inboxId, userId])
+}
+
+model Ticket {
+  id              String              @id @default(cuid())
+  tenantId        String
+  customerId      String?
+  inboxId         String
+  createdByUserId String
+  assignedUserId  String?
+  number          Int
+  subject         String
+  description     String
+  status          TicketStatus        @default(NEW)
+  priority        TicketPriority      @default(MEDIUM)
+  origin          TicketOrigin        @default(INTERNAL)
+  closedAt        DateTime?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  tenant          Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer        Customer?           @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  inbox           Inbox               @relation(fields: [inboxId], references: [id], onDelete: Restrict)
+  createdByUser   User                @relation("CreatedTickets", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  assignedUser    User?               @relation("AssignedTickets", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  interactions    TicketInteraction[]
+  attachments     TicketAttachment[]
+  schedules       TicketSchedule[]
+  parentRelations TicketRelation[]    @relation("ParentTicket")
+  childRelations  TicketRelation[]    @relation("ChildTicket")
+
+  @@unique([tenantId, number])
+  @@index([tenantId, status])
+  @@index([tenantId, inboxId])
+}
+
+model TicketInteraction {
+  id          String             @id @default(cuid())
+  ticketId    String
+  authorId    String
+  type        InteractionType
+  content     String
+  createdAt   DateTime           @default(now())
+  ticket      Ticket             @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  author      User               @relation(fields: [authorId], references: [id], onDelete: Restrict)
+  attachments TicketAttachment[]
+
+  @@index([ticketId, createdAt])
+}
+
+model TicketAttachment {
+  id            String             @id @default(cuid())
+  ticketId      String
+  interactionId String?
+  originalName  String
+  fileUrl       String
+  contentType   String
+  sizeBytes     Int
+  createdAt     DateTime           @default(now())
+  ticket        Ticket             @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  interaction   TicketInteraction? @relation(fields: [interactionId], references: [id], onDelete: SetNull)
+
+  @@index([ticketId, createdAt])
+  @@index([interactionId])
+}
+
+model NotificationJob {
+  id            String                @id @default(cuid())
+  tenantId      String
+  ticketId      String?
+  channel       String                @default("EMAIL")
+  event         String
+  payload       Json
+  status        NotificationJobStatus @default(PENDING)
+  attempts      Int                   @default(0)
+  maxAttempts   Int                   @default(3)
+  nextAttemptAt DateTime?             @default(now())
+  sentAt        DateTime?
+  lastError     String?
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@index([tenantId, createdAt])
+}
+
+model TicketSchedule {
+  id            String         @id @default(cuid())
+  ticketId      String
+  scheduledById String
+  dueAt         DateTime
+  reason        String
+  status        ScheduleStatus @default(PENDING)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  ticket        Ticket         @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  scheduledBy   User           @relation("ScheduledByUser", fields: [scheduledById], references: [id], onDelete: Restrict)
+
+  @@index([ticketId, dueAt])
+}
+
+model TicketRelation {
+  id             String             @id @default(cuid())
+  parentTicketId String
+  childTicketId  String
+  type           TicketRelationType @default(CHILD)
+  createdAt      DateTime           @default(now())
+  parentTicket   Ticket             @relation("ParentTicket", fields: [parentTicketId], references: [id], onDelete: Cascade)
+  childTicket    Ticket             @relation("ChildTicket", fields: [childTicketId], references: [id], onDelete: Cascade)
+
+  @@unique([parentTicketId, childTicketId, type])
+}
+
+model AuditEvent {
+  id         String   @id @default(cuid())
+  tenantId   String
+  userId     String?
+  entityType String
+  entityId   String
+  action     String
+  payload    Json?
+  createdAt  DateTime @default(now())
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, entityType, entityId])
+}
